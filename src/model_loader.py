@@ -1,7 +1,7 @@
 import time
 
 import torch
-from transformers import AutoTokenizer, AutoModelForCausalLM
+from transformers import AutoTokenizer, AutoModelForCausalLM, GenerationConfig
 
 from . import dprint
 
@@ -13,7 +13,7 @@ def load_model_and_tokenizer(model_name="HuggingFaceTB/SmolLM2-135M", use_gpu=Tr
     model = AutoModelForCausalLM.from_pretrained(model_name)
 
     if use_gpu:
-        model.to("cuda")
+        model.to("cuda")  # pyright: ignore[reportArgumentType]
 
     if not tokenizer.chat_template:
         tokenizer.chat_template = """{% for message in messages %}
@@ -27,6 +27,22 @@ def load_model_and_tokenizer(model_name="HuggingFaceTB/SmolLM2-135M", use_gpu=Tr
     if not tokenizer.pad_token:
         tokenizer.pad_token = tokenizer.eos_token
 
+    # Sanity check: the chat template ends assistant turns with the literal
+    # string "<|endoftext|>". generate() stops on tokenizer.eos_token_id, so that
+    # string MUST encode to exactly that single id -- otherwise the stop token the
+    # model is trained to emit is not the one generation halts on.
+    eot_ids = tokenizer.encode("<|endoftext|>", add_special_tokens=False)
+    dprint(
+        f"eos_token={tokenizer.eos_token!r} eos_token_id={tokenizer.eos_token_id} "
+        f"| '<|endoftext|>' -> {eot_ids}"
+    )
+    if eot_ids != [tokenizer.eos_token_id]:
+        print(
+            f"[WARN] template stop token '<|endoftext|>' encodes to {eot_ids}, "
+            f"not [eos_token_id={tokenizer.eos_token_id}]; generation may not stop "
+            f"where the model was trained to."
+        )
+
     return model, tokenizer
 
 
@@ -36,6 +52,7 @@ def generate_responses(
     user_message,
     system_message=None,
     max_new_tokens=100,
+    repetition_penalty=1.1,  # >1.0 penalizes repeating tokens; 1.0 = no penalty.
     return_stats=False,
 ):
     # Format chat using tokenizer's chat template
@@ -56,6 +73,16 @@ def generate_responses(
 
     inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
 
+    # All decoding options live in one GenerationConfig so it's clear at a glance
+    # which knobs are set (and the IDE can autocomplete/type-check the fields).
+    gen_config = GenerationConfig(
+        max_new_tokens=max_new_tokens,
+        do_sample=False,  # greedy: deterministic, reproducible for benchmarking/eval.
+        repetition_penalty=repetition_penalty,  # >1.0 penalizes repeats; 1.0 = off.
+        pad_token_id=tokenizer.pad_token_id,
+        eos_token_id=tokenizer.eos_token_id,
+    )
+
     # Time only the generate() call. CUDA is async, so sync before/after to get
     # the real wall time on GPU (otherwise the timer stops before kernels finish).
     is_cuda = model.device.type == "cuda"
@@ -64,13 +91,7 @@ def generate_responses(
     start = time.perf_counter()
     # Recommended to use vllm, sglang or TensorRT
     with torch.no_grad():
-        outputs = model.generate(
-            **inputs,
-            max_new_tokens=max_new_tokens,
-            do_sample=False,
-            pad_token_id=tokenizer.pad_token_id,
-            eos_token_id=tokenizer.eos_token_id,
-        )
+        outputs = model.generate(**inputs, generation_config=gen_config)
     if is_cuda:
         torch.cuda.synchronize()
     elapsed = time.perf_counter() - start
@@ -109,6 +130,7 @@ def test_model_with_questions(
 # uv run python -m src.model_loader
 if __name__ == "__main__":
     model_name = "HuggingFaceTB/SmolLM2-135M"
+    model_name = "HuggingFaceTB/SmolLM2-135M-Instruct"
     model, tokenizer = load_model_and_tokenizer(model_name, use_gpu=True)
 
     user_message = "who are you"
