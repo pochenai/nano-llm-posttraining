@@ -3,6 +3,8 @@ name = "llm-posttraining"
 version = "0.1.0"
 requires-python = ">=3.14"
 dependencies = [
+    "datasets>=5.0.0",
+    "rich>=15.0.0",
     "torch",
     # Pin to 4.x: transformers 5 tightened config validation and rejects models
     # with non-standard head_dim (e.g. anrilombard/mzansilm-125m, head_dim=56).
