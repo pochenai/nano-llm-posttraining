@@ -21,6 +21,21 @@ def load_sftdata(
     return ds
 
 
+def questions(ds):
+    """Extract user prompts from a dataset of messages."""
+    return [
+        next(m["content"] for m in ex["messages"] if m["role"] == "user") for ex in ds
+    ]
+
+
+def outputs(ds):
+    """Extract assistant responses from a dataset of messages."""
+    return [
+        next(m["content"] for m in ex["messages"] if m["role"] == "assistant")
+        for ex in ds
+    ]
+
+
 def display_dataset(dataset, n=3):
     # Render a few examples as a rich table (long text wraps inside each cell).
     table = Table(show_lines=True, title=f"Dataset preview (first {n})")

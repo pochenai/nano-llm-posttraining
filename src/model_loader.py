@@ -6,7 +6,7 @@ from transformers import AutoTokenizer, AutoModelForCausalLM
 from . import dprint
 
 
-def load_model_and_tokenizer(model_name, use_gpu=False):
+def load_model_and_tokenizer(model_name="HuggingFaceTB/SmolLM2-135M", use_gpu=True):
 
     # Load base model and tokenizer
     tokenizer = AutoTokenizer.from_pretrained(model_name)
@@ -89,6 +89,21 @@ def generate_responses(
         return response, stats
 
     return response
+
+
+def test_model_with_questions(
+    model, tokenizer, questions, answers=None, system_message=None, title="Model Output"
+):
+    print(f"\n=== {title} ===")
+    for (
+        i,
+        question,
+    ) in enumerate(questions, 1):
+        response = generate_responses(model, tokenizer, question, system_message)
+        print(f"\nModel Input {i}:\n{question}\nModel Output {i}:\n{response}\n")
+        # Optional ground-truth answer from the training data, for side-by-side compare.
+        if answers is not None:
+            print(f"Reference {i}:\n{answers[i - 1]}\n")
 
 
 # uv run python -m src.model_loader

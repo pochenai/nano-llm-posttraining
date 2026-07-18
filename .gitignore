@@ -17,3 +17,4 @@ wandb/
 *.ckpt
 *.pt
 *.safetensors
+trainer_output/
