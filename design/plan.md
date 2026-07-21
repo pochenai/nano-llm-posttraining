@@ -32,6 +32,12 @@ aa
 
 - Phase 0（~3 天）：仓库基础设施与打包
 - Phase 1（~2 周）：CPU toy 实验 —— 遗忘（RL's Razor 复现）+ 方差
+- 普通 8GB 显卡 1 天上手 LLM Post-Training！超简洁教程 + SFT/GRPO 对比 + RL 涌现现象
+  - SFT和RL对模型改变的对比，看看用什么观察角度(具体的数据，指标等，可以通过sample)
+    - 显式KL惩罚是防止reward hacking，on-policy采样主要是防止遗忘
+  - 本身涌现出来的结构(在训练loss之外出现的结构都算，可以通过长短token，观察不同step，同一个问题的输出？；或者本身CoT?)
+  - GRPO本身分母导致的bad example token序列变长的问题（这个估计训练量很大，做不起）
+
 - Phase 2（~4-6 周）：Qwen2.5-0.5B 尺度复现 + 涌现探查（租单卡 GPU）
 - Phase 3（贯穿 + 最后 1 周）：分发、运营、三次发布
 
