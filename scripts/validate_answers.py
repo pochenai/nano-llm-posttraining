@@ -1,6 +1,6 @@
 """Validate hand-written IFEval answers against the verifiable checker.
 
-   uv run python scripts_validate_answers.py <answers.json>
+   uv run python scripts/validate_answers.py <answers.json>
 
 answers.json maps a prompt index (string) to an answer string. Prints the
 satisfaction score per index and a final PASS/total summary. An answer counts
@@ -9,6 +9,11 @@ as usable only at score == 1.0 (all constraints satisfied).
 
 import json
 import sys
+from pathlib import Path
+
+# Make the repo root importable when run as `python scripts/validate_answers.py`,
+# which otherwise puts scripts/ (not the repo root) on sys.path.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from src.ifeval_rewards import load_ifeval, Response
 
