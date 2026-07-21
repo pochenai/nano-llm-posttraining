@@ -1,0 +1,10 @@
+# export HF_ENDPOINT=https://hf-mirror.com
+# cp uv_.toml ~/.config/uv/uv.toml
+
+# 1) Python 解释器走 GitHub 代理
+python-install-mirror = "https://gh-proxy.com/https://github.com/astral-sh/python-build-standalone/releases/download"
+
+# 2) PyPI 包走清华源
+[[index]]
+url = "https://pypi.tuna.tsinghua.edu.cn/simple"
+default = true
