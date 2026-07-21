@@ -24,13 +24,14 @@ MAX_COMPLETION_LENGTH = 200
 # Defaults are the winning configuration from the ablation (see grpo_runs.json).
 # beta mattered most: at 0.02 the KL penalty pinned the policy to its init
 # (kl ~0.002) and nothing was learned no matter what else was tuned.
-RUN = os.environ.get("GRPO_RUN", "default")
+RUN = os.environ.get("GRPO_RUN", "beta002")
 NUM_GENERATIONS = int(os.environ.get("GRPO_NUM_GENERATIONS", 16))
 NUM_EPOCHS = float(os.environ.get("GRPO_EPOCHS", 3))
 BETA = float(os.environ.get("GRPO_BETA", 0.005))
 SKIP_TRAIN = os.environ.get("GRPO_SKIP_TRAIN") == "1"
 
 OUTPUT_DIR = f"trainer_output/grpo-{RUN}"
+print("OUTPUT_DIR:", OUTPUT_DIR)
 RESULTS_PATH = "trainer_output/grpo_runs.json"
 last_ckpt = get_last_checkpoint(OUTPUT_DIR) if os.path.isdir(OUTPUT_DIR) else None
 
@@ -77,7 +78,11 @@ def eval_ifeval(model, tokenizer, dataset, title, batch_size=8):
         for i in range(0, len(prompts), batch_size):
             batch = prompts[i : i + batch_size]
             inputs = tokenizer(
-                batch, return_tensors="pt", padding=True, truncation=True, max_length=512
+                batch,
+                return_tensors="pt",
+                padding=True,
+                truncation=True,
+                max_length=512,
             ).to(model.device)
             with torch.no_grad():
                 out = model.generate(**inputs, generation_config=gen_config)

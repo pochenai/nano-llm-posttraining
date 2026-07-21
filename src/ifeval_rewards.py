@@ -205,9 +205,7 @@ class Response:
         """
         if not instruction_id_list or self.is_degenerate:
             return 0.0
-        hits = sum(
-            self.check(i, kw) for i, kw in zip(instruction_id_list, kwargs_list)
-        )
+        hits = sum(self.check(i, kw) for i, kw in zip(instruction_id_list, kwargs_list))
         return hits / len(instruction_id_list)
 
 
@@ -252,8 +250,14 @@ def _completion_text(completion):
     return completion
 
 
-def ifeval_reward(completions, instruction_id_list, constraint_kwargs, **_):
-    """TRL reward function. Extra dataset columns arrive as keyword arguments."""
+def ifeval_reward(
+    completions, instruction_id_list, constraint_kwargs, **_
+) -> list[float | None]:
+    """TRL reward function. Extra dataset columns arrive as keyword arguments.
+
+    The return type matches TRL's RewardFunc alias (list[float | None]); a bare
+    list[float] is not assignable to it because list is invariant.
+    """
     return [
         Response(_completion_text(c)).satisfaction(ids, kws)
         for c, ids, kws in zip(completions, instruction_id_list, constraint_kwargs)
@@ -269,7 +273,10 @@ def _too_long(ids, kws, max_words):
     group scores 0 and the group contributes no gradient -- drop them."""
     for i, kw in zip(ids, kws):
         if i == "length_constraints:number_words":
-            if kw.get("relation") == "at least" and (kw.get("num_words") or 0) > max_words:
+            if (
+                kw.get("relation") == "at least"
+                and (kw.get("num_words") or 0) > max_words
+            ):
                 return True
     return False
 
@@ -301,7 +308,8 @@ def load_ifeval(split="train", max_words=150, system_message=None):
 # uv run python -m src.ifeval_rewards
 if __name__ == "__main__":
     ds = load_ifeval()
-    print(ds)
+    print("ifeval", ds.shape)
+    print("ifeval data sample:\n", ds[0])
 
     cases = [
         ("no comma here", ["punctuation:no_comma"], [{}], 1.0),
@@ -309,14 +317,36 @@ if __name__ == "__main__":
         ("<<Emerald Isle Dawn>> body", ["detectable_format:title"], [{}], 1.0),
         ('"quoted"', ["startend:quotation"], [{}], 1.0),
         ('{"a": 1}', ["detectable_format:json_format"], [{}], 1.0),
-        ("* one\n* two", ["detectable_format:number_bullet_lists"], [{"num_bullets": 2}], 1.0),
-        ("all lower, and no comma", ["change_case:english_lowercase", "punctuation:no_comma"], [{}, {}], 0.5),
+        (
+            "* one\n* two",
+            ["detectable_format:number_bullet_lists"],
+            [{"num_bullets": 2}],
+            1.0,
+        ),
+        (
+            "all lower, and no comma",
+            ["change_case:english_lowercase", "punctuation:no_comma"],
+            [{}, {}],
+            0.5,
+        ),
         # Anti-reward-hacking guards.
         ("<<title>> body text here", ["detectable_format:title"], [{}], 0.0),
         ("<<t>>\n" + "***\n" * 60, ["detectable_format:title"], [{}], 0.0),
-        ("*ab* x *ab* y *ab* z", ["detectable_format:number_highlighted_sections"], [{"num_highlights": 3}], 0.0),
-        ("*alpha one* q *beta two* q *gamma three*", ["detectable_format:number_highlighted_sections"], [{"num_highlights": 3}], 1.0),
+        (
+            "*ab* x *ab* y *ab* z",
+            ["detectable_format:number_highlighted_sections"],
+            [{"num_highlights": 3}],
+            0.0,
+        ),
+        (
+            "*alpha one* q *beta two* q *gamma three*",
+            ["detectable_format:number_highlighted_sections"],
+            [{"num_highlights": 3}],
+            1.0,
+        ),
     ]
     for text, ids, kws, want in cases:
         got = satisfaction(text, ids, kws)
-        print(f"{'ok ' if got == want else 'FAIL'} want={want:.2f} got={got:.2f}  {text[:38]!r}")
+        print(
+            f"{'ok ' if got == want else 'FAIL'} want={want:.2f} got={got:.2f}  {text[:38]!r}"
+        )

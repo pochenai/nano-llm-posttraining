@@ -155,7 +155,7 @@ SOFT_FORMAT_WEIGHT = 0.25
 STRICT_FORMAT_WEIGHT = 0.25
 
 
-def correctness_reward(completions, gold, **_):
+def correctness_reward(completions, gold, **_) -> list[float | None]:
     """The real objective: right answer or not."""
     return [
         CORRECTNESS_WEIGHT if Completion(c).is_correct(g) else 0.0
@@ -163,14 +163,14 @@ def correctness_reward(completions, gold, **_):
     ]
 
 
-def proximity_reward(completions, gold, **_):
+def proximity_reward(completions, gold, **_) -> list[float | None]:
     """Partial credit for landing near the gold number."""
     return [
         PROXIMITY_WEIGHT * Completion(c).proximity(g) for c, g in zip(completions, gold)
     ]
 
 
-def numeric_reward(completions, **_):
+def numeric_reward(completions, **_) -> list[float | None]:
     """Credit for putting *a number* in <answer>, right or wrong."""
     return [
         NUMERIC_WEIGHT if to_number(Completion(c).tagged_answer) is not None else 0.0
@@ -178,7 +178,7 @@ def numeric_reward(completions, **_):
     ]
 
 
-def xmlcount_reward(completions, **_):
+def xmlcount_reward(completions, **_) -> list[float | None]:
     """Fractional credit per XML tag present.
 
     Deliberately NOT all-or-nothing: a policy that has never emitted the full
@@ -188,14 +188,14 @@ def xmlcount_reward(completions, **_):
     return [XMLCOUNT_WEIGHT * Completion(c).tag_hits for c in completions]
 
 
-def soft_format_reward(completions, **_):
+def soft_format_reward(completions, **_) -> list[float | None]:
     """Tags present and ordered; stray text around them tolerated."""
     return [
         SOFT_FORMAT_WEIGHT if Completion(c).is_soft_format else 0.0 for c in completions
     ]
 
 
-def strict_format_reward(completions, **_):
+def strict_format_reward(completions, **_) -> list[float | None]:
     """The exact requested structure, nothing else."""
     return [
         STRICT_FORMAT_WEIGHT if Completion(c).is_strict_format else 0.0

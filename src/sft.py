@@ -9,9 +9,12 @@ from src.data_loader import load_sftdata, questions, outputs
 from src.model_loader import load_model_and_tokenizer, test_model_with_questions
 from transformers.trainer_utils import get_last_checkpoint
 
-# Where the trainer writes checkpoints. If one already exists there, load the
-# latest (checkpoint-<step>) and skip training; otherwise train from the base model.
-OUTPUT_DIR = "trainer_output/sft"
+# Base model and output dir are env-overridable so the same script produces both
+# the base-model SFT and the Instruct-start SFT used for the RL-vs-SFT KL study
+# (RL's Razor needs both fine-tunes to share a starting checkpoint). Defaults
+# keep the original behavior: base SmolLM2-135M -> trainer_output/sft.
+SFT_MODEL = os.environ.get("SFT_MODEL", "HuggingFaceTB/SmolLM2-135M")
+OUTPUT_DIR = os.environ.get("SFT_OUTPUT_DIR", "trainer_output/sft")
 last_ckpt = get_last_checkpoint(OUTPUT_DIR) if os.path.isdir(OUTPUT_DIR) else None
 
 ######################
@@ -28,7 +31,8 @@ SYSTEM_MESSAGE = "You are a helpful assistant."
 # load-or-train
 ######################
 # load the base model, eval before SFT, then train or load the trained model
-model, tokenizer = load_model_and_tokenizer(use_gpu=True)
+model, tokenizer = load_model_and_tokenizer(model_name=SFT_MODEL, use_gpu=True)
+print(f"SFT base: {SFT_MODEL} -> {OUTPUT_DIR}")
 
 test_model_with_questions(
     model,

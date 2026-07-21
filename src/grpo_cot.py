@@ -120,6 +120,11 @@ def eval_gsm8k(model, tokenizer, dataset, title, batch_size=8):
     acc = correct / len(responses)
     print(f"--> accuracy: {acc:.4f}  ({correct}/{len(responses)})")
     print(f"--> has <answer> tag: {formatted}/{len(responses)}")
+
+    # Print one full completion so the actual reasoning is visible, not just the
+    # score. Same fixed example every eval (greedy), so before/after CoT compares.
+    print(f"\n  sample CoT (gold={eval_dataset[0]['gold']}):\n  {responses[0]}")
+
     return {"accuracy": acc, "n": len(responses), "formatted": formatted}
 
 

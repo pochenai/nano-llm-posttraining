@@ -1,6 +1,9 @@
 # vscode
 .vscode 
 
+# design
+design
+
 # Python / uv
 .venv/
 __pycache__/

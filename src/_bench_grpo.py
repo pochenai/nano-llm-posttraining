@@ -1,6 +1,8 @@
 """Measure GRPO rollout throughput on this GPU: batched generation is ~80% of
 GRPO's wall-clock, so it sets the per-step cost."""
 import time
+from typing import cast
+
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
@@ -11,7 +13,7 @@ NEW_TOK = 200  # max_completion_length
 tok = AutoTokenizer.from_pretrained(MODEL)
 if tok.pad_token is None:
     tok.pad_token = tok.eos_token
-model = AutoModelForCausalLM.from_pretrained(MODEL, dtype=torch.bfloat16).to("cuda")
+model = AutoModelForCausalLM.from_pretrained(MODEL, dtype=torch.bfloat16).to("cuda")  # pyright: ignore[reportArgumentType]
 model.eval()
 
 q = ("Natalia sold clips to 48 friends in April, and then she sold half as many "
@@ -26,9 +28,11 @@ def run():
     torch.cuda.synchronize()
     t0 = time.perf_counter()
     with torch.no_grad():
-        out = model.generate(**batch, max_new_tokens=NEW_TOK, do_sample=True,
-                             temperature=0.8, top_p=0.95,
-                             pad_token_id=tok.pad_token_id)
+        # return_dict_in_generate defaults to False -> a plain tensor at runtime,
+        # but generate()'s annotated return is a union; cast so .shape resolves.
+        out = cast(torch.Tensor, model.generate(
+            **batch, max_new_tokens=NEW_TOK, do_sample=True,
+            temperature=0.8, top_p=0.95, pad_token_id=tok.pad_token_id))
     torch.cuda.synchronize()
     dt = time.perf_counter() - t0
     new = (out.shape[1] - batch["input_ids"].shape[1]) * out.shape[0]
