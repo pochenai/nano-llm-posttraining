@@ -235,7 +235,13 @@ def load_gsm8k(split="train", system_message=SYSTEM_MESSAGE, limit=None):
         if system_message:
             messages.append({"role": "system", "content": system_message})
         messages.append({"role": "user", "content": ex["question"]})
-        return {"prompt": messages, "gold": extract_gold(ex["answer"])}
+        # `reference` keeps GSM8K's full worked solution (steps + "#### 42") so
+        # eval can show a gold CoT next to the model's; `gold` is just the number.
+        return {
+            "prompt": messages,
+            "gold": extract_gold(ex["answer"]),
+            "reference": ex["answer"],
+        }
 
     return ds.map(to_conversational, remove_columns=ds.column_names)
 

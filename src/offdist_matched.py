@@ -31,7 +31,11 @@ BASE_MODEL = "HuggingFaceTB/SmolLM2-135M-Instruct"
 SYSTEM_MESSAGE = "You are a helpful assistant."
 MAX_COMPLETION_LENGTH = 200
 K = int(os.environ.get("RFT_K", 16))
-EPOCHS = float(os.environ.get("EPOCHS", 10))
+EPOCHS = float(os.environ.get("EPOCHS", 15))
+# SFT on ~165 examples needs a higher LR than GRPO's 1e-5: with so few optimizer
+# steps, 1e-5 never fits the targets (train-set satisfaction stayed ~0.38 vs the
+# 1.0 targets). 5e-5 actually memorizes what each arm is taught.
+LR = float(os.environ.get("LR", 5e-5))
 GEN_BATCH = 16
 
 # Claude's off-distribution expert answers ship with the repo for reproducibility;
@@ -127,7 +131,7 @@ def eval_ifeval(model, tok):
 def train_arm(name, ds):
     out_dir = f"trainer_output/{name}-sft"
     model, tok = load_model_and_tokenizer(model_name=BASE_MODEL, use_gpu=True)
-    cfg = SFTConfig(output_dir=out_dir, learning_rate=1e-5, num_train_epochs=EPOCHS,
+    cfg = SFTConfig(output_dir=out_dir, learning_rate=LR, num_train_epochs=EPOCHS,
                     per_device_train_batch_size=8, gradient_accumulation_steps=4,
                     bf16=True, logging_steps=20, save_total_limit=1, report_to="none")
     SFTTrainer(model=model, args=cfg, train_dataset=ds, processing_class=tok).train()

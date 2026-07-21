@@ -54,7 +54,7 @@ SKIP_TRAIN = os.environ.get("GRPO_COT_SKIP_TRAIN") == "1"
 USE_LORA = os.environ.get("GRPO_COT_LORA", "1") == "1"
 # vLLM makes rollouts several times faster, but wants spare VRAM for its own KV
 # cache -- worth it on a rented card, usually too tight on 8GB.
-USE_VLLM = os.environ.get("GRPO_COT_VLLM") == "1"
+USE_VLLM = os.environ.get("GRPO_COT_VLLM", "1") == "1"
 
 OUTPUT_DIR = f"trainer_output/grpo-cot-{RUN}"
 RESULTS_PATH = "trainer_output/grpo_cot_runs.json"
@@ -98,7 +98,10 @@ def eval_gsm8k(model, tokenizer, dataset, title, batch_size=8):
         for i in range(0, len(prompts), batch_size):
             batch = prompts[i : i + batch_size]
             inputs = tokenizer(
-                batch, return_tensors="pt", padding=True, truncation=True,
+                batch,
+                return_tensors="pt",
+                padding=True,
+                truncation=True,
                 max_length=512,
             ).to(model.device)
             with torch.no_grad():
@@ -123,7 +126,10 @@ def eval_gsm8k(model, tokenizer, dataset, title, batch_size=8):
 
     # Print one full completion so the actual reasoning is visible, not just the
     # score. Same fixed example every eval (greedy), so before/after CoT compares.
-    print(f"\n  sample CoT (gold={eval_dataset[0]['gold']}):\n  {responses[0]}")
+    # Read from `dataset` (not eval_dataset) so it lines up with responses[0].
+    print(f"\n  sample Q: {dataset[0]['prompt'][-1]['content']}")
+    print(f"  reference CoT: {dataset[0]['reference']}")
+    print(f"  model CoT (gold={dataset[0]['gold']}):\n  {responses[0]}")
 
     return {"accuracy": acc, "n": len(responses), "formatted": formatted}
 
@@ -171,8 +177,14 @@ config = {
 if SKIP_TRAIN:
     # Baseline mode: score the untrained policy on the held-out split.
     before = eval_gsm8k(model, tokenizer, eval_dataset, "Baseline (no GRPO)")
-    record({"run": f"baseline-{BASE_MODEL}", "config": config, "before": None,
-            "after": before})
+    record(
+        {
+            "run": f"baseline-{BASE_MODEL}",
+            "config": config,
+            "before": None,
+            "after": before,
+        }
+    )
     raise SystemExit(0)
 
 before = cached_baseline()
@@ -193,8 +205,13 @@ else:
             lora_alpha=32,
             lora_dropout=0.05,
             target_modules=[
-                "q_proj", "k_proj", "v_proj", "o_proj",
-                "gate_proj", "up_proj", "down_proj",
+                "q_proj",
+                "k_proj",
+                "v_proj",
+                "o_proj",
+                "gate_proj",
+                "up_proj",
+                "down_proj",
             ],
             task_type="CAUSAL_LM",
         )
