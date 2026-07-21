@@ -11,7 +11,7 @@ dependencies = [
     # Pin to 4.x: transformers 5 tightened config validation and rejects models
     # with non-standard head_dim (e.g. anrilombard/mzansilm-125m, head_dim=56).
     "transformers>=4.52.4,<5",
-    "trl>=1.8.0",
+    "trl[vllm]>=1.8.0",
 ]
 
 # Pull torch from PyTorch's official CUDA 12.8 index (RTX 5060 Ti / Blackwell needs cu128).
