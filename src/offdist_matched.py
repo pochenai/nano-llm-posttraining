@@ -59,49 +59,65 @@ def generate_batch(model, tokenizer, prompts, gc):
     try:
         for i in range(0, len(prompts), GEN_BATCH):
             b = prompts[i : i + GEN_BATCH]
-            inp = tokenizer(b, return_tensors="pt", padding=True, truncation=True,
-                            max_length=512).to(model.device)
+            inp = tokenizer(
+                b, return_tensors="pt", padding=True, truncation=True, max_length=512
+            ).to(model.device)
             g = model.generate(**inp, generation_config=gc)
             for j in range(len(b)):
-                out.append(tokenizer.decode(g[j][inp["input_ids"].shape[1]:],
-                                            skip_special_tokens=True).strip())
+                out.append(
+                    tokenizer.decode(
+                        g[j][inp["input_ids"].shape[1] :], skip_special_tokens=True
+                    ).strip()
+                )
     finally:
         tokenizer.padding_side = orig
     return out
 
 
 def sat(ans, ex):
-    return Response(ans).satisfaction(ex["instruction_id_list"], ex["constraint_kwargs"])
+    return Response(ans).satisfaction(
+        ex["instruction_id_list"], ex["constraint_kwargs"]
+    )
 
 
 def row(ex, completion):
-    return {"messages": [
-        {"role": "system", "content": SYSTEM_MESSAGE},
-        ex["prompt"][-1],
-        {"role": "assistant", "content": completion},
-    ]}
+    return {
+        "messages": [
+            {"role": "system", "content": SYSTEM_MESSAGE},
+            ex["prompt"][-1],
+            {"role": "assistant", "content": completion},
+        ]
+    }
 
 
 def build_matched():
     """Return (claude_dataset, indist_dataset) over the shared, size-matched set."""
     base, tok = load_model_and_tokenizer(model_name=BASE_MODEL, use_gpu=True)
     # Claude labels that pass.
-    claude_ok = {i: CLAUDE[i] for i in CLAUDE
-                 if sat(CLAUDE[i], full_train[i]) >= 1.0}
+    claude_ok = {i: CLAUDE[i] for i in CLAUDE if sat(CLAUDE[i], full_train[i]) >= 1.0}
     print(f"claude labels passing: {len(claude_ok)}/{len(CLAUDE)}")
 
     # In-distribution best-of-K on the SAME prompts.
-    gc = GenerationConfig(max_new_tokens=MAX_COMPLETION_LENGTH, do_sample=True,
-                          temperature=1.0, top_p=1.0, pad_token_id=tok.pad_token_id,
-                          eos_token_id=tok.eos_token_id)
+    gc = GenerationConfig(
+        max_new_tokens=MAX_COMPLETION_LENGTH,
+        do_sample=True,
+        temperature=1.0,
+        top_p=1.0,
+        pad_token_id=tok.pad_token_id,
+        eos_token_id=tok.eos_token_id,
+    )
     idxs = sorted(claude_ok)
-    prompts = [tok.apply_chat_template(full_train[i]["prompt"], tokenize=False,
-               add_generation_prompt=True) for i in idxs]
+    prompts = [
+        tok.apply_chat_template(
+            full_train[i]["prompt"], tokenize=False, add_generation_prompt=True
+        )
+        for i in idxs
+    ]
     repeated = [p for p in prompts for _ in range(K)]
     comps = generate_batch(base, tok, repeated, gc)
     indist_ok = {}
     for pos, i in enumerate(idxs):
-        cand = comps[pos * K:(pos + 1) * K]
+        cand = comps[pos * K : (pos + 1) * K]
         bs, bc = max(((sat(c, full_train[i]), c) for c in cand), key=lambda t: t[0])
         if bs >= 1.0:
             indist_ok[i] = bc
@@ -110,6 +126,8 @@ def build_matched():
     # Intersection -> identical prompts AND identical count for both arms.
     matched = sorted(set(claude_ok) & set(indist_ok))
     print(f"MATCHED set (both pass): {len(matched)} prompts")
+    # Persist the exact training set so train-set fit can be measured afterwards.
+    json.dump(matched, open("trainer_output/matched_indices.json", "w"))
     del base
     torch.cuda.empty_cache()
     claude_ds = Dataset.from_list([row(full_train[i], claude_ok[i]) for i in matched])
@@ -117,41 +135,62 @@ def build_matched():
     return claude_ds, indist_ds, matched
 
 
-def eval_ifeval(model, tok):
-    gc = GenerationConfig(max_new_tokens=MAX_COMPLETION_LENGTH, do_sample=False,
-                          repetition_penalty=1.1, pad_token_id=tok.pad_token_id,
-                          eos_token_id=tok.eos_token_id)
-    prompts = [tok.apply_chat_template(ex["prompt"], tokenize=False,
-               add_generation_prompt=True) for ex in eval_dataset]
+def eval_on(model, tok, examples):
+    # cap 512 + batch=1: no truncation, no left-pad nondeterminism.
+    gc = GenerationConfig(
+        max_new_tokens=512,
+        do_sample=False,
+        repetition_penalty=1.1,
+        pad_token_id=tok.pad_token_id,
+        eos_token_id=tok.eos_token_id,
+    )
     model.eval()
-    resp = generate_batch(model, tok, prompts, gc)
-    return sum(sat(r, ex) for r, ex in zip(resp, eval_dataset)) / len(eval_dataset)
+    scores = []
+    for ex in examples:
+        p = tok.apply_chat_template(ex["prompt"], tokenize=False, add_generation_prompt=True)
+        inp = tok(p, return_tensors="pt").to(model.device)
+        with torch.no_grad():
+            o = model.generate(**inp, generation_config=gc)
+        r = tok.decode(o[0][inp["input_ids"].shape[1]:], skip_special_tokens=True).strip()
+        scores.append(sat(r, ex))
+    return sum(scores) / len(scores)
 
 
-def train_arm(name, ds):
+def train_arm(name, ds, train_examples):
     out_dir = f"trainer_output/{name}-sft"
     model, tok = load_model_and_tokenizer(model_name=BASE_MODEL, use_gpu=True)
-    cfg = SFTConfig(output_dir=out_dir, learning_rate=LR, num_train_epochs=EPOCHS,
-                    per_device_train_batch_size=8, gradient_accumulation_steps=4,
-                    bf16=True, logging_steps=20, save_total_limit=1, report_to="none")
+    cfg = SFTConfig(
+        output_dir=out_dir,
+        learning_rate=LR,
+        num_train_epochs=EPOCHS,
+        per_device_train_batch_size=8,
+        gradient_accumulation_steps=4,
+        bf16=True,
+        logging_steps=20,
+        save_total_limit=1,
+        report_to="none",
+    )
     SFTTrainer(model=model, args=cfg, train_dataset=ds, processing_class=tok).train()
-    model.save_pretrained(out_dir); tok.save_pretrained(out_dir)
-    acc = eval_ifeval(model, tok)
-    print(f"[matched-{name}] IFEval on held-out {len(eval_dataset)}: {acc:.4f}")
+    model.save_pretrained(out_dir)
+    tok.save_pretrained(out_dir)
+    # Train-set fit vs held-out: if the model actually learned its targets, train
+    # >> test. train ~= test means it never fit the data (too few examples).
+    train_acc = eval_on(model, tok, train_examples)
+    test_acc = eval_on(model, tok, eval_dataset)
+    print(f"[{name}-sft] TRAIN-set sat={train_acc:.4f}  held-out sat={test_acc:.4f}")
     del model
     torch.cuda.empty_cache()
-    return acc
+    return train_acc, test_acc
 
 
 if __name__ == "__main__":
+    torch.manual_seed(0)  # reproducible in-dist sampling / matched set
     claude_ds, indist_ds, matched = build_matched()
+    train_examples = [full_train[i] for i in matched]
     steps = len(matched) * EPOCHS / 32
-    print(f"~optimizer steps per arm: {steps:.0f}")
-    acc_off = train_arm("offdist", claude_ds)
-    acc_in = train_arm("indist", indist_ds)
-    print("\n=== fully-matched (same prompts, same count) ===")
-    print(f"  offdist-sft (Claude, off-dist) IFEval: {acc_off:.4f}")
-    print(f"  indist-sft  (base,   in-dist)  IFEval: {acc_in:.4f}")
-    print("\nNext: forward KL for each")
-    print("  KL_MODEL=trainer_output/offdist-sft KL_LABEL=offdist-sft uv run python -m src.kl_analysis")
-    print("  KL_MODEL=trainer_output/indist-sft  KL_LABEL=indist-sft  uv run python -m src.kl_analysis")
+    print(f"~optimizer steps per arm: {steps:.0f}  (train examples per arm: {len(matched)})")
+    off_train, off_test = train_arm("offdist", claude_ds, train_examples)
+    in_train, in_test = train_arm("indist", indist_ds, train_examples)
+    print("\n=== fully-matched: did the model learn its training data? ===")
+    print(f"  offdist-sft  TRAIN={off_train:.4f}  held-out={off_test:.4f}")
+    print(f"  indist-sft   TRAIN={in_train:.4f}  held-out={in_test:.4f}")

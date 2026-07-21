@@ -1,7 +1,7 @@
 [project]
 name = "llm-posttraining"
 version = "0.1.0"
-requires-python = ">=3.14"
+requires-python = ">=3.12"
 dependencies = [
     "datasets>=5.0.0",
     "lm-eval>=0.4.12",
@@ -11,8 +11,14 @@ dependencies = [
     # Pin to 4.x: transformers 5 tightened config validation and rejects models
     # with non-standard head_dim (e.g. anrilombard/mzansilm-125m, head_dim=56).
     "transformers>=4.52.4,<5",
-    "trl[vllm]>=1.8.0",
+    "trl>=1.8.0",
 ]
+
+# vLLM is optional: it speeds up GRPO rollouts on a rented GPU, but it drags in
+# torchvision and heavy CUDA deps that break the text-only stack on bleeding-edge
+# Python (e.g. 3.14). Install only where needed:  uv sync --extra vllm
+[project.optional-dependencies]
+vllm = ["vllm"]
 
 # Pull torch from PyTorch's official CUDA 12.8 index (RTX 5060 Ti / Blackwell needs cu128).
 # explicit=true means this index is used ONLY for packages explicitly bound to it
