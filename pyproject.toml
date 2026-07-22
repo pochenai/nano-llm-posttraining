@@ -25,11 +25,14 @@ dependencies = [
 # pull) so the cu128 [tool.uv.sources] pin below actually applies -- uv does not
 # reliably redirect a transitive-only dep to an explicit index.
 [project.optional-dependencies]
-# vllm 0.23+ ships only CUDA-13 wheels (needs libcudart.so.13); this project stays
-# on cu128 so it runs on both the local (CUDA 12.8) and server (13.0, backward-compat)
-# drivers. 0.23 is the first CUDA-13 wheel; cap below it and floor at 0.16 (the
-# lowest vLLM the installed trl supports) so the pin is both cu128 and trl-compatible.
-vllm = ["vllm>=0.16,<0.23", "torchvision", "torchaudio"]
+# vLLM's CUDA build must match the cu128 torch stack so it runs on both the local
+# (CUDA 12.8) and server (13.0, backward-compatible) drivers. vLLM switched its
+# default wheel to CUDA 13 somewhere between 0.16 and 0.22: 0.22.1's `_C` links
+# libcudart.so.13 (absent here) and dies on import, but 0.16.0 is still a CUDA-12
+# wheel (pulls nvidia-cuda-runtime-cu12, imports cleanly -- verified). 0.16 is also
+# trl's minimum supported vLLM, so pinning to 0.16.x is both CUDA-12 and warning-free.
+# Keep the range narrow (<0.17): a wider cap resolves to the newest match (0.22, CUDA-13).
+vllm = ["vllm>=0.16,<0.17", "torchvision", "torchaudio"]
 
 # Pull torch from PyTorch's official CUDA 12.8 index (RTX 5060 Ti / Blackwell needs cu128).
 # explicit=true means this index is used ONLY for packages explicitly bound to it
