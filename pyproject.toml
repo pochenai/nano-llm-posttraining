@@ -18,14 +18,24 @@ dependencies = [
 # vLLM is optional: it speeds up GRPO rollouts on a rented GPU, but it drags in
 # torchvision and heavy CUDA deps that break the text-only stack on bleeding-edge
 # Python (e.g. 3.14). Install only where needed:  uv sync --extra vllm
+# torchvision/torchaudio are listed EXPLICITLY (not just left to vllm's transitive
+# pull) so the cu128 [tool.uv.sources] pin below actually applies -- uv does not
+# reliably redirect a transitive-only dep to an explicit index.
 [project.optional-dependencies]
-vllm = ["vllm"]
+vllm = ["vllm", "torchvision", "torchaudio"]
 
 # Pull torch from PyTorch's official CUDA 12.8 index (RTX 5060 Ti / Blackwell needs cu128).
 # explicit=true means this index is used ONLY for packages explicitly bound to it
 # in [tool.uv.sources] below; everything else (transformers, etc.) still comes from PyPI.
+#
+# torchvision/torchaudio MUST come from the same cu128 index as torch. They are pulled
+# in transitively by vllm (--extra vllm); if they come from PyPI instead, the build's
+# C++ ops are compiled against a different torch ABI and import dies with
+# "operator torchvision::nms does not exist". Pinning them here forces the matching build.
 [tool.uv.sources]
 torch = { index = "pytorch-cu128" }
+torchvision = { index = "pytorch-cu128" }
+torchaudio = { index = "pytorch-cu128" }
 
 [[tool.uv.index]]
 name = "pytorch-cu128"

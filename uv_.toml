@@ -11,3 +11,7 @@ python-install-mirror = "https://gh-proxy.com/https://github.com/astral-sh/pytho
 [[index]]
 url = "https://pypi.tuna.tsinghua.edu.cn/simple"
 default = true
+
+[[index]]
+name = "pytorch-cu128"
+url = "https://mirror.sjtu.edu.cn/pytorch-wheels/cu128"
