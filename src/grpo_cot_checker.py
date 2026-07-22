@@ -122,6 +122,6 @@ if __name__ == "__main__":
     # GRPO_COT_Q = which problem index; GRPO_COT_SPLIT = train (default) or test.
     q_idx = int(os.environ.get("GRPO_COT_Q", 0))
     which = (
-        eval_dataset if os.environ.get("GRPO_COT_SPLIT") == "test" else train_dataset
+        train_dataset if os.environ.get("GRPO_COT_SPLIT") == "train" else eval_dataset
     )
     answer_question(q_idx, which)
