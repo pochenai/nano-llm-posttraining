@@ -7,14 +7,18 @@ more sensitive to distribution drift (the very thing KL measures), so if the
 KL-heavy arms actually sacrificed general language ability, PPL should rise here
 where accuracy did not.
 
-Uses lm-eval's `wikitext` task (wikitext-2-raw, standard rolling word_perplexity)
-rather than a hand-rolled strided PPL loop, so the number is a known quantity.
+Two corpora, both via lm-eval's built-in rolling word_perplexity (identical
+methodology), so the forgetting signal can't be an artifact of one text source:
+  - wikitext : wikitext-2-raw, clean Wikipedia prose.
+  - pile_10k : NeelNanda/pile-10k, a diverse Pile sample (web/books/arxiv/code).
+FineWeb-Edu (SmolLM2's own training family) has no small slice, so pile_10k is
+the practical "different genre, general web" second opinion.
 
     uv run python -m src.ppl_eval                                   # base Instruct
     uv run python -m src.ppl_eval trainer_output/offdist-sft
 
 Lower is better. A KL-heavy arm forgetting general LM ability => higher PPL than
-baseline; a flat PPL across arms => the forgetting null holds on this probe too.
+baseline on BOTH corpora; flat on both => the forgetting null holds here too.
 """
 
 import json
@@ -24,33 +28,40 @@ from typing import Any, cast
 
 from lm_eval import simple_evaluate
 
-TASK = "wikitext"
+# (task, per-task doc limit). pile_10k docs can be long, so cap them for bounded
+# runtime; wikitext is small enough to run whole. Keep limits fixed across models.
+CORPORA = [("wikitext", None), ("pile_10k", 500)]
 RESULTS_PATH = "trainer_output/ppl_runs.json"
 
 
-def ppl_score(model_path, batch_size="auto"):
-    """Return wikitext word/byte perplexity + bits-per-byte for one checkpoint."""
-    res = cast(Any, simple_evaluate)(
-        model="hf",
-        model_args=f"pretrained={model_path},dtype=bfloat16",
-        tasks=[TASK],
-        batch_size=batch_size,
-        device="cuda",
-    )["results"][TASK]
+def _pick(res, prefix):
+    for k, v in res.items():
+        if k.startswith(prefix):
+            return v
+    return None
 
-    # Keys look like "word_perplexity,none"; grab whichever the task version emits.
-    def pick(prefix):
-        for k, v in res.items():
-            if k.startswith(prefix):
-                return v
-        return None
 
-    return {
-        "model": model_path,
-        "word_perplexity": pick("word_perplexity"),
-        "byte_perplexity": pick("byte_perplexity"),
-        "bits_per_byte": pick("bits_per_byte"),
-    }
+# Fixed batch_size=1: "auto" over-estimates on pile_10k's long docs and OOMs an
+# 8GB card; the 135M model is fast enough that batch 1 is still quick.
+def ppl_score(model_path, batch_size=1):
+    """Return word/byte perplexity + bits-per-byte on each corpus for one model."""
+    out: dict[str, Any] = {"model": model_path}
+    for task, limit in CORPORA:
+        res = cast(Any, simple_evaluate)(
+            model="hf",
+            model_args=f"pretrained={model_path},dtype=bfloat16",
+            tasks=[task],
+            limit=limit,
+            batch_size=batch_size,
+            device="cuda",
+        )["results"][task]
+        out[task] = {
+            "limit": limit,
+            "word_perplexity": _pick(res, "word_perplexity"),
+            "byte_perplexity": _pick(res, "byte_perplexity"),
+            "bits_per_byte": _pick(res, "bits_per_byte"),
+        }
+    return out
 
 
 def record(entry):
@@ -72,8 +83,10 @@ if __name__ == "__main__":
     )
     out = ppl_score(model_path)
     record(out)
-    print(
-        f"\n{model_path}\n  word_ppl={out['word_perplexity']:.3f}  "
-        f"byte_ppl={out['byte_perplexity']:.4f}  bpb={out['bits_per_byte']:.4f}"
-    )
+    print(f"\n{model_path}")
+    for task, _ in CORPORA:
+        t = out[task]
+        print(
+            f"  {task:<10} word_ppl={t['word_perplexity']:.3f}  bpb={t['bits_per_byte']:.4f}"
+        )
     print(f"recorded -> {RESULTS_PATH}")

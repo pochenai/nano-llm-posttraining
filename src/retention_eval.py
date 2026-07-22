@@ -85,7 +85,11 @@ if __name__ == "__main__":
     model_path = (
         sys.argv[1] if len(sys.argv) > 1 else "HuggingFaceTB/SmolLM2-135M-Instruct"
     )
-    limit = int(os.environ["RETENTION_LIMIT"]) if os.environ.get("RETENTION_LIMIT") else None
+    limit = (
+        int(os.environ["RETENTION_LIMIT"])
+        if os.environ.get("RETENTION_LIMIT")
+        else None
+    )
 
     out = retention_score(model_path, limit=limit)
     record(out)
