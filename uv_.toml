@@ -1,5 +1,8 @@
+# pip install uv
+# git clone https://github.com/pochenai/nano-llm-posttraining.git
+# cd nano-llm-posttraining
+# mkdir -p ~/.config/uv && cp uv_.toml ~/.config/uv/uv.toml
 # export HF_ENDPOINT=https://hf-mirror.com
-# cp uv_.toml ~/.config/uv/uv.toml
 
 # 1) Python 解释器走 GitHub 代理
 python-install-mirror = "https://gh-proxy.com/https://github.com/astral-sh/python-build-standalone/releases/download"

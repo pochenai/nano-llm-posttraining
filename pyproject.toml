@@ -5,6 +5,7 @@ requires-python = ">=3.12"
 dependencies = [
     "datasets>=5.0.0",
     "lm-eval>=0.4.12",
+    "matplotlib>=3.11.1",
     "peft>=0.19.1",
     "rich>=15.0.0",
     "torch",

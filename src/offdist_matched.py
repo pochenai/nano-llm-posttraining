@@ -147,11 +147,15 @@ def eval_on(model, tok, examples):
     model.eval()
     scores = []
     for ex in examples:
-        p = tok.apply_chat_template(ex["prompt"], tokenize=False, add_generation_prompt=True)
+        p = tok.apply_chat_template(
+            ex["prompt"], tokenize=False, add_generation_prompt=True
+        )
         inp = tok(p, return_tensors="pt").to(model.device)
         with torch.no_grad():
             o = model.generate(**inp, generation_config=gc)
-        r = tok.decode(o[0][inp["input_ids"].shape[1]:], skip_special_tokens=True).strip()
+        r = tok.decode(
+            o[0][inp["input_ids"].shape[1] :], skip_special_tokens=True
+        ).strip()
         scores.append(sat(r, ex))
     return sum(scores) / len(scores)
 
@@ -188,7 +192,9 @@ if __name__ == "__main__":
     claude_ds, indist_ds, matched = build_matched()
     train_examples = [full_train[i] for i in matched]
     steps = len(matched) * EPOCHS / 32
-    print(f"~optimizer steps per arm: {steps:.0f}  (train examples per arm: {len(matched)})")
+    print(
+        f"~optimizer steps per arm: {steps:.0f}  (train examples per arm: {len(matched)})"
+    )
     off_train, off_test = train_arm("offdist", claude_ds, train_examples)
     in_train, in_test = train_arm("indist", indist_ds, train_examples)
     print("\n=== fully-matched: did the model learn its training data? ===")
