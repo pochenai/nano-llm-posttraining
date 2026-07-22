@@ -266,7 +266,11 @@ else:
     #                    without terminating -- raise max_completion_length.
     grpo_trainer.train()
     grpo_trainer.save_model(OUTPUT_DIR)
-    model, tokenizer = load_model_and_tokenizer(model_name=OUTPUT_DIR, use_gpu=True)
+    # Eval the just-trained model in memory instead of reloading it from disk: the
+    # reload is redundant here and fragile -- a peft/transformers version skew in the
+    # LoRA-adapter load path can crash *after* a multi-hour run, wasting all of it.
+    # (The LOAD_CHECKPOINT branch above still reloads when we skip training.)
+    model = grpo_trainer.model
 
 ######################
 # eval the trained model

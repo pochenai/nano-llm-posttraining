@@ -43,6 +43,14 @@ def load_model_and_tokenizer(model_name="HuggingFaceTB/SmolLM2-135M", use_gpu=Tr
             f"where the model was trained to."
         )
 
+    # Align the model's generation config with the tokenizer's special tokens now,
+    # so the Trainer doesn't do this itself later and print a "tokenizer has new
+    # PAD/BOS/EOS tokens ... updated" notice. Qwen2.5, for example, uses
+    # pad=<|endoftext|> and no BOS, which differ from the model's stored config.
+    if model.generation_config is not None:
+        model.generation_config.pad_token_id = tokenizer.pad_token_id
+        model.generation_config.bos_token_id = tokenizer.bos_token_id
+
     return model, tokenizer
 
 

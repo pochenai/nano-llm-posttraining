@@ -6,7 +6,10 @@ dependencies = [
     "datasets>=5.0.0",
     "lm-eval>=0.4.12",
     "matplotlib>=3.11.1",
-    "peft>=0.19.1",
+    # peft 0.18+ loads LoRA adapters through a tensor-parallel shard path that imports
+    # `EmbeddingParallel` from transformers -- a transformers-5 symbol absent from the
+    # 4.x line this project pins. Cap at 0.17.x so adapter reload works on transformers 4.
+    "peft>=0.17,<0.18",
     "rich>=15.0.0",
     "torch",
     # Pin to 4.x: transformers 5 tightened config validation and rejects models
