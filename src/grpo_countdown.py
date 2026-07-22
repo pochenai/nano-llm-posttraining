@@ -36,15 +36,22 @@ from src.model_loader import load_model_and_tokenizer
 # clearest. Below 1.5B the policy rarely samples a valid search, so GRPO has nothing
 # to amplify (every group zero-variance -> no gradient).
 BASE_MODEL = os.environ.get("GRPO_COT_MODEL", "Qwen/Qwen2.5-1.5B-Instruct")
-# Countdown backtracking ("try X ... no ... try Y") needs room; give it more tokens
-# than GSM8K's short chains. Lower via env if VRAM is tight.
-MAX_COMPLETION_LENGTH = int(os.environ.get("GRPO_COT_COMPLETION_LEN", 512))
+# Countdown backtracking ("try X ... no ... try Y") needs room; TinyZero uses a 1024
+# response length, so match it. Lower via env if VRAM is tight.
+MAX_COMPLETION_LENGTH = int(os.environ.get("GRPO_COT_COMPLETION_LEN", 1024))
 
 # Ablation knobs, overridable per run so variants stay comparable.
 RUN = os.environ.get("GRPO_COT_RUN", "default")
-NUM_GENERATIONS = int(os.environ.get("GRPO_COT_NUM_GENERATIONS", 8))
+NUM_GENERATIONS = int(os.environ.get("GRPO_COT_NUM_GENERATIONS", 16))
+# Defaults are tuned for an 8GB card; a 24GB 4090 has room to raise both (LoRA keeps
+# optimizer state tiny). per_device x grad_accum must stay a multiple of NUM_GENERATIONS.
+BATCH = int(os.environ.get("GRPO_COT_BATCH", 8))
+GRAD_ACCUM = int(os.environ.get("GRPO_COT_GRAD_ACCUM", 4))
 NUM_EPOCHS = float(os.environ.get("GRPO_COT_EPOCHS", 1))
-BETA = float(os.environ.get("GRPO_COT_BETA", 0.02))
+# TinyZero uses KL coef 0.001 -- low, so the policy is free to explore/diverge, which
+# is what lets the backtracking behaviour emerge. A high KL (gsm8k used 0.02) pins the
+# policy to the base and suppresses the aha moment.
+BETA = float(os.environ.get("GRPO_COT_BETA", 0.001))
 TRAIN_LIMIT = int(os.environ.get("GRPO_COT_TRAIN_LIMIT", 0))  # 0 = full split
 EVAL_LIMIT = int(os.environ.get("GRPO_COT_EVAL_LIMIT", 100))
 SKIP_TRAIN = os.environ.get("GRPO_COT_SKIP_TRAIN") == "1"
@@ -214,8 +221,8 @@ else:
         output_dir=OUTPUT_DIR,
         learning_rate=1e-5 if USE_LORA else 1e-6,  # LoRA tolerates a higher LR.
         num_train_epochs=NUM_EPOCHS,
-        per_device_train_batch_size=4,
-        gradient_accumulation_steps=8,
+        per_device_train_batch_size=BATCH,
+        gradient_accumulation_steps=GRAD_ACCUM,
         num_generations=NUM_GENERATIONS,  # Group size G. Larger -> fewer zero-variance groups.
         max_completion_length=MAX_COMPLETION_LENGTH,
         temperature=1.0,  # High enough to create in-group variance.
@@ -249,6 +256,13 @@ else:
     #   completions/clipped_ratio   high -> raise max_completion_length (search is long).
     grpo_trainer.train()
     grpo_trainer.save_model(OUTPUT_DIR)
+    # Persist the full per-step training log so the steps-vs-score curve (TinyZero's
+    # critic/score/mean plot) can be rebuilt later. Each entry carries step, reward,
+    # rewards/<func>/mean (correctness ~ solve rate), kl, etc. Trainer also embeds this
+    # in each checkpoint's trainer_state.json, but save_total_limit=1 prunes old
+    # checkpoints -- this standalone dump survives.
+    with open(os.path.join(OUTPUT_DIR, "log_history.json"), "w") as f:
+        json.dump(grpo_trainer.state.log_history, f, indent=2)
     # Eval the just-trained model in memory instead of reloading it from disk: the
     # reload is redundant here and fragile -- a peft/transformers version skew in the
     # LoRA-adapter load path can crash *after* a multi-hour run, wasting all of it.

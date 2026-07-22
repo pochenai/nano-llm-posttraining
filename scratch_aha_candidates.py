@@ -1,45 +1,41 @@
-"""Find GSM8K problems the base Qwen2.5-0.5B gets WRONG -> aha-moment candidates.
+"""Find GSM8K problems the base model gets WRONG -> aha-moment candidates (vLLM).
 
 A wrong answer that still shows a coherent multi-step chain (right setup, arithmetic
 slip, near-miss number) is the best place to watch for a post-training "aha moment"
 (self-correction). A totally-lost answer is a weaker candidate. Rank accordingly.
+
+vLLM batches/schedules all N prompts at once, so this is much faster than a per-prompt
+HF generate loop. Needs the `--extra vllm` environment.
 
     uv run python scratch_aha_candidates.py
 """
 
 from typing import Any
 
-import torch
-from transformers import GenerationConfig
+from vllm import LLM, SamplingParams
 
 from src.gsm8k_rewards import Completion, load_gsm8k, to_number
-from src.model_loader import load_model_and_tokenizer
 
 N = 60
 BASE = "Qwen/Qwen2.5-1.5B-Instruct"
 
 # Any: datasets rows are dicts at runtime but pyright types them as non-subscriptable.
 ds: Any = load_gsm8k("test", limit=N)
-model, tok = load_model_and_tokenizer(model_name=BASE, use_gpu=True)
-gc = GenerationConfig(
-    max_new_tokens=384,
-    do_sample=False,
-    pad_token_id=tok.pad_token_id,
-    eos_token_id=tok.eos_token_id,
-)
-model.eval()
+
+llm = LLM(model=BASE)
+tok = llm.get_tokenizer()
+prompts = [
+    tok.apply_chat_template(ex["prompt"], tokenize=False, add_generation_prompt=True)
+    for ex in ds
+]
+# temperature=0 -> greedy, deterministic (comparable across runs). vLLM returns the
+# outputs in the same order as the prompts, so we can zip them back with ds.
+sp = SamplingParams(temperature=0.0, max_tokens=384)
+outs = llm.generate(prompts, sp)
 
 wrong = []
-for i, ex in enumerate(ds):
-    p = tok.apply_chat_template(
-        ex["prompt"], tokenize=False, add_generation_prompt=True
-    )
-    inp = tok(p, return_tensors="pt", truncation=True, max_length=768).to(model.device)
-    with torch.no_grad():
-        out = model.generate(**inp, generation_config=gc)
-    r = tok.decode(
-        out[0][inp["input_ids"].shape[1] :], skip_special_tokens=True
-    ).strip()
+for i, (ex, o) in enumerate(zip(ds, outs)):
+    r = o.outputs[0].text.strip()
     c = Completion(r)
     if c.is_correct(ex["gold"]):
         continue
