@@ -27,10 +27,40 @@ from peft import LoraConfig
 from trl import GRPOTrainer, GRPOConfig  # pyright: ignore[reportPrivateImportUsage]
 from transformers import GenerationConfig
 from transformers.trainer_utils import get_last_checkpoint
+from transformers.trainer_callback import ProgressCallback, TrainerCallback
 
 from src import LOAD_CHECKPOINT
 from src.countdown_rewards import REWARD_FUNCS, Completion, load_countdown
 from src.model_loader import load_model_and_tokenizer
+
+
+class CompactLog(TrainerCallback):
+    """Console prints only the metrics worth watching, one line per log. The full metric
+    dict is still saved to log_history.json after training, so nothing is lost for later
+    analysis -- this only quiets the terminal.
+    """
+
+    KEYS = [
+        ("reward", "reward"),
+        ("correct", "rewards/correctness_reward/mean"),  # solve signal -- should climb
+        ("prox", "rewards/proximity_reward/mean"),  # search slope
+        ("len", "completions/mean_length"),  # should now GROW (search), not shrink
+        ("0std", "frac_reward_zero_std"),  # keep near 0 (else no gradient)
+        ("kl", "kl"),
+        ("H", "entropy"),
+    ]
+
+    def on_log(self, args, state, control, logs=None, **kwargs):
+        if not logs or "reward" not in logs:  # skip eval / non-training logs
+            return
+        st = logs.get("step_time", 0.0)
+        left = (state.max_steps - state.global_step) if state.max_steps > 0 else 0
+        parts = [f"step {state.global_step}/{state.max_steps}"]
+        parts += [f"{lab}={logs[k]:.3f}" for lab, k in self.KEYS if k in logs]
+        if st:
+            parts.append(f"eta={left * st / 3600:.1f}h")
+        print("  ".join(parts))
+
 
 # TinyZero found ~1.5B is the threshold where Countdown reasoning develops; 3B is
 # clearest. Below 1.5B the policy rarely samples a valid search, so GRPO has nothing
@@ -45,8 +75,8 @@ RUN = os.environ.get("GRPO_COT_RUN", "default")
 NUM_GENERATIONS = int(os.environ.get("GRPO_COT_NUM_GENERATIONS", 16))
 # Defaults are tuned for an 8GB card; a 24GB 4090 has room to raise both (LoRA keeps
 # optimizer state tiny). per_device x grad_accum must stay a multiple of NUM_GENERATIONS.
-BATCH = int(os.environ.get("GRPO_COT_BATCH", 8))
-GRAD_ACCUM = int(os.environ.get("GRPO_COT_GRAD_ACCUM", 4))
+BATCH = int(os.environ.get("GRPO_COT_BATCH", 2))
+GRAD_ACCUM = int(os.environ.get("GRPO_COT_GRAD_ACCUM", 16))
 NUM_EPOCHS = float(os.environ.get("GRPO_COT_EPOCHS", 1))
 # TinyZero uses KL coef 0.001 -- low, so the policy is free to explore/diverge, which
 # is what lets the backtracking behaviour emerge. A high KL (gsm8k used 0.02) pins the
@@ -245,6 +275,10 @@ else:
         processing_class=tokenizer,
         peft_config=peft_config,
     )
+    # Replace the default per-step metric-dict flood with a compact one-liner (the full
+    # dict still goes to log_history.json). Drop the tqdm bar's dump; keep our line.
+    grpo_trainer.remove_callback(ProgressCallback)
+    grpo_trainer.add_callback(CompactLog())
     # What to watch in the logs:
     #   frac_reward_zero_std  THE health metric. Fraction of groups where every
     #                    completion scored the same -> advantage 0 -> no gradient. Near
