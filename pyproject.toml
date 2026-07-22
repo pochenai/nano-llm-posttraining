@@ -24,8 +24,9 @@ dependencies = [
 [project.optional-dependencies]
 # vllm 0.23+ ships only CUDA-13 wheels (needs libcudart.so.13); this project stays
 # on cu128 so it runs on both the local (CUDA 12.8) and server (13.0, backward-compat)
-# drivers. Pin vllm to the last cu128-era line (0.11.x, which pairs with torch 2.9.x).
-vllm = ["vllm>=0.11,<0.12", "torchvision", "torchaudio"]
+# drivers. 0.23 is the first CUDA-13 wheel; cap below it and floor at 0.16 (the
+# lowest vLLM the installed trl supports) so the pin is both cu128 and trl-compatible.
+vllm = ["vllm>=0.16,<0.23", "torchvision", "torchaudio"]
 
 # Pull torch from PyTorch's official CUDA 12.8 index (RTX 5060 Ti / Blackwell needs cu128).
 # explicit=true means this index is used ONLY for packages explicitly bound to it
@@ -44,3 +45,9 @@ torchaudio = { index = "pytorch-cu128" }
 name = "pytorch-cu128"
 url = "https://download.pytorch.org/whl/cu128"
 explicit = true
+
+[tool.uv]
+# Some vLLM deps (e.g. xgrammar 0.2.4) publish releases with no x86_64-linux wheel.
+# Requiring this platform forces uv to backtrack to a dependency set that actually
+# installs on the local WSL/Ubuntu x86_64 box, not just aarch64/macos.
+required-environments = ["sys_platform == 'linux' and platform_machine == 'x86_64'"]
