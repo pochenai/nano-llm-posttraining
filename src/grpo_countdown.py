@@ -1,13 +1,19 @@
-"""GRPO on GSM8K to elicit chain-of-thought reasoning.
+"""GRPO on the Countdown task (TinyZero-style) to elicit self-correction / aha moments.
 
-Designed to be debugged locally on a small card and then moved to a rented GPU
-by changing environment variables only:
+Countdown is a *search* task -- reach a target from a few numbers using +,-,*,/, each
+number once. Many attempts fail, so the natural chain is "try X -> wrong -> try Y",
+which is the backtracking behaviour ("wait, that's not right, let me try...") RL is
+meant to amplify. GSM8K rarely needs it; Countdown does, which is why TinyZero used it.
 
-    # local (8GB): prove the loop runs, reward curve moves
-    GRPO_COT_TRAIN_LIMIT=200 uv run python -m src.grpo_cot
+Same knobs as grpo_cot.py, overridable by env var so local debug -> cloud is one change:
 
-    # cloud (24GB 4090): the real run
-    GRPO_COT_MODEL=Qwen/Qwen2.5-3B-Instruct GRPO_COT_VLLM=1 uv run python -m src.grpo_cot
+    # local smoke: prove the loop runs and reward moves
+    GRPO_COT_TRAIN_LIMIT=200 uv run python -m src.grpo_countdown
+
+    # cloud (24GB): the real run
+    GRPO_COT_MODEL=Qwen/Qwen2.5-3B-Instruct uv run python -m src.grpo_countdown
+
+Ref: https://github.com/Jiayi-Pan/TinyZero
 """
 
 import json
@@ -23,23 +29,16 @@ from transformers import GenerationConfig
 from transformers.trainer_utils import get_last_checkpoint
 
 from src import LOAD_CHECKPOINT
-from src.gsm8k_rewards import (
-    REWARD_FUNCS,
-    SYSTEM_MESSAGE,
-    Completion,
-    load_gsm8k,
-)
+from src.countdown_rewards import REWARD_FUNCS, Completion, load_countdown
 from src.model_loader import load_model_and_tokenizer
 
-# Qwen2.5-0.5B-Instruct already emits some step-by-step math, which is the point:
-# GRPO amplifies behaviour the policy can already sample, it cannot invent it. A
-# model that never samples a correct answer gives every group zero reward
-# variance -> zero advantage -> no gradient.
+# TinyZero found ~1.5B is the threshold where Countdown reasoning develops; 3B is
+# clearest. Below 1.5B the policy rarely samples a valid search, so GRPO has nothing
+# to amplify (every group zero-variance -> no gradient).
 BASE_MODEL = os.environ.get("GRPO_COT_MODEL", "Qwen/Qwen2.5-1.5B-Instruct")
-# 256 clipped 30-56% of completions in a smoke run, and a truncated completion
-# poisons last-number scoring: the final number becomes a mid-reasoning value, so
-# a correct chain gets marked wrong. Lower it via env if VRAM is tight.
-MAX_COMPLETION_LENGTH = int(os.environ.get("GRPO_COT_COMPLETION_LEN", 384))
+# Countdown backtracking ("try X ... no ... try Y") needs room; give it more tokens
+# than GSM8K's short chains. Lower via env if VRAM is tight.
+MAX_COMPLETION_LENGTH = int(os.environ.get("GRPO_COT_COMPLETION_LEN", 512))
 
 # Ablation knobs, overridable per run so variants stay comparable.
 RUN = os.environ.get("GRPO_COT_RUN", "default")
@@ -49,31 +48,24 @@ BETA = float(os.environ.get("GRPO_COT_BETA", 0.02))
 TRAIN_LIMIT = int(os.environ.get("GRPO_COT_TRAIN_LIMIT", 0))  # 0 = full split
 EVAL_LIMIT = int(os.environ.get("GRPO_COT_EVAL_LIMIT", 100))
 SKIP_TRAIN = os.environ.get("GRPO_COT_SKIP_TRAIN") == "1"
-# LoRA keeps optimizer state tiny and gives the KL reference model for free (the
-# adapter is just disabled), which is what makes 3B fit on a 24GB card.
 USE_LORA = os.environ.get("GRPO_COT_LORA", "1") == "1"
-# vLLM makes rollouts several times faster, but wants spare VRAM for its own KV
-# cache -- worth it on a rented card, usually too tight on 8GB.
 USE_VLLM = os.environ.get("GRPO_COT_VLLM", "1") == "1"
 
-OUTPUT_DIR = f"trainer_output/grpo-cot-{RUN}"
-RESULTS_PATH = "trainer_output/grpo_cot_runs.json"
+OUTPUT_DIR = f"trainer_output/grpo-countdown-{RUN}"
+RESULTS_PATH = "trainer_output/grpo_countdown_runs.json"
 last_ckpt = get_last_checkpoint(OUTPUT_DIR) if os.path.isdir(OUTPUT_DIR) else None
 
 ######################
 # load data
 ######################
-train_dataset = load_gsm8k("train", limit=TRAIN_LIMIT or None)
-eval_dataset = load_gsm8k("test", limit=EVAL_LIMIT)
+train_dataset = load_countdown("train", limit=TRAIN_LIMIT or None)
+eval_dataset = load_countdown("test", limit=EVAL_LIMIT)
 print(f"train={len(train_dataset)}  eval={len(eval_dataset)}")
 
 
-def eval_gsm8k(model, tokenizer, dataset, title, batch_size=8):
-    """Exact-match accuracy on held-out GSM8K -- the same signal GRPO optimizes,
-    so before/after numbers are directly comparable.
-
-    Generation is batched (left-padded) because a per-prompt loop dominates the
-    wall time of a short run.
+def eval_countdown(model, tokenizer, dataset, title, batch_size=8):
+    """Fraction of held-out puzzles solved -- a valid equation (each number once) that
+    evaluates to the target. Same signal GRPO optimizes, so before/after is comparable.
     """
     print(f"\n=== {title} ===")
     prompts = [
@@ -114,22 +106,23 @@ def eval_gsm8k(model, tokenizer, dataset, title, batch_size=8):
     finally:
         tokenizer.padding_side = original_side
 
-    # Parse each completion once; accuracy and format adherence both read from it.
     parsed = [Completion(r) for r in responses]
-    correct = sum(c.is_correct(ex["gold"]) for c, ex in zip(parsed, dataset))
-    # Format adherence is tracked separately: it usually climbs first and is the
-    # early sign GRPO is working even while accuracy is still flat.
-    formatted = sum(1 for c in parsed if c.tagged_answer is not None)
+    correct = sum(
+        c.is_correct(ex["target"], ex["nums"]) for c, ex in zip(parsed, dataset)
+    )
+    # Format adherence climbs first; it's the early sign GRPO is working while the
+    # solve rate is still flat.
+    formatted = sum(1 for c in parsed if c.equation is not None)
     acc = correct / len(responses)
-    print(f"--> accuracy: {acc:.4f}  ({correct}/{len(responses)})")
-    print(f"--> has <answer> tag: {formatted}/{len(responses)}")
+    print(f"--> solved: {acc:.4f}  ({correct}/{len(responses)})")
+    print(f"--> has <answer> equation: {formatted}/{len(responses)}")
 
-    # Print one full completion so the actual reasoning is visible, not just the
-    # score. Same fixed example every eval (greedy), so before/after CoT compares.
-    # Read from `dataset` (not eval_dataset) so it lines up with responses[0].
+    # Print one full completion so the actual search is visible, not just the score.
     print(f"\n  sample Q: {dataset[0]['prompt'][-1]['content']}")
-    print(f"  reference CoT: {dataset[0]['reference']}")
-    print(f"  model CoT (gold={dataset[0]['gold']}):\n  {responses[0]}")
+    print(
+        f"  model completion (target={dataset[0]['target']}, "
+        f"nums={dataset[0]['nums']}):\n  {responses[0]}"
+    )
 
     return {"accuracy": acc, "n": len(responses), "formatted": formatted}
 
@@ -176,7 +169,7 @@ config = {
 
 if SKIP_TRAIN:
     # Baseline mode: score the untrained policy on the held-out split.
-    before = eval_gsm8k(model, tokenizer, eval_dataset, "Baseline (no GRPO)")
+    before = eval_countdown(model, tokenizer, eval_dataset, "Baseline (no GRPO)")
     record(
         {
             "run": f"baseline-{BASE_MODEL}",
@@ -189,7 +182,7 @@ if SKIP_TRAIN:
 
 before = cached_baseline()
 if before is None:
-    before = eval_gsm8k(model, tokenizer, eval_dataset, "Before GRPO")
+    before = eval_countdown(model, tokenizer, eval_dataset, "Before GRPO")
 else:
     print(f"\nUsing cached baseline: {before['accuracy']:.4f}")
 
@@ -197,8 +190,6 @@ if LOAD_CHECKPOINT and last_ckpt:
     print(f"Loading GRPO model from {last_ckpt} (skip training)")
     model, tokenizer = load_model_and_tokenizer(model_name=last_ckpt, use_gpu=True)
 else:
-    # r=16 on the attention + MLP projections. Bigger r buys capacity at the cost
-    # of optimizer memory; 16 is the usual starting point for a few-B policy.
     peft_config = (
         LoraConfig(
             r=16,
@@ -219,10 +210,6 @@ else:
         else None
     )
 
-    # GRPO samples num_generations completions per prompt and normalizes reward
-    # within that group, so the global batch (per_device x grad_accum) must be a
-    # multiple of it. 4 x 8 = 32 keeps only 4 sequences in a forward pass, which
-    # is what leaves room for a 0.5B policy plus KV cache on 8GB.
     grpo_config = GRPOConfig(
         output_dir=OUTPUT_DIR,
         learning_rate=1e-5 if USE_LORA else 1e-6,  # LoRA tolerates a higher LR.
@@ -253,28 +240,23 @@ else:
     )
     # What to watch in the logs:
     #   frac_reward_zero_std  THE health metric. Fraction of groups where every
-    #                    completion scored the same -> advantage 0 -> no gradient.
-    #                    Near 1.0 means training is a no-op no matter how long it
-    #                    runs. Seen at 0.92 here when the reward demanded XML tags
-    #                    the policy never emits; fixed by scoring the last number
-    #                    instead. If it climbs: raise temperature or G, or make
-    #                    the reward able to see what the policy actually does.
-    #   reward / reward_std   should be > 0 and trending up.
-    #   rewards/correctness_reward  the real objective.
-    #   rewards/xmlcount_reward     format shaping; usually moves first.
-    #   completions/clipped_ratio   high means answers run past the length cap
-    #                    without terminating -- raise max_completion_length.
+    #                    completion scored the same -> advantage 0 -> no gradient. Near
+    #                    1.0 means training is a no-op. On Countdown this is high early
+    #                    (the base rarely finds a valid equation); the graded valideq /
+    #                    answer / format tiers exist to keep some variance until it does.
+    #   rewards/correctness_reward  the real objective (solve rate).
+    #   rewards/valideq_reward      uses the right numbers; usually moves before solving.
+    #   completions/clipped_ratio   high -> raise max_completion_length (search is long).
     grpo_trainer.train()
     grpo_trainer.save_model(OUTPUT_DIR)
     # Eval the just-trained model in memory instead of reloading it from disk: the
     # reload is redundant here and fragile -- a peft/transformers version skew in the
     # LoRA-adapter load path can crash *after* a multi-hour run, wasting all of it.
-    # (The LOAD_CHECKPOINT branch above still reloads when we skip training.)
     model = grpo_trainer.model
 
 ######################
 # eval the trained model
 ######################
-after = eval_gsm8k(model, tokenizer, eval_dataset, f"After GRPO [{RUN}]")
+after = eval_countdown(model, tokenizer, eval_dataset, f"After GRPO [{RUN}]")
 record({"run": RUN, "config": config, "before": before, "after": after})
 print(f"\n{RUN}: {before['accuracy']:.4f} -> {after['accuracy']:.4f}")
