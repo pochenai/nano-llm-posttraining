@@ -62,9 +62,20 @@ class Completion:
 
     @cached_property
     def equation(self):
-        """The expression inside <answer>, or None when the tag is missing."""
+        """The expression inside <answer>, or None when the tag is missing.
+
+        Models very often write "expr = target" (e.g. "77 - 73 + 6 - 20 = -10"); keep
+        only the left side. Otherwise the trailing "= <target>" breaks eval (illegal
+        '=') AND makes the target count as an extra number -- so a genuine attempt gets
+        scored 0 on both correctness and proximity, starving the search signal.
+        """
         m = _ANSWER_RE.search(self.text)
-        return m.group(1).strip() if m else None
+        if not m:
+            return None
+        eq = m.group(1).strip()
+        if "=" in eq:
+            eq = eq.split("=")[0].strip()
+        return eq or None
 
     @cached_property
     def value(self):
