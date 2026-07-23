@@ -35,7 +35,7 @@ from src.model_loader import load_model_and_tokenizer
 # GRPO amplifies behaviour the policy can already sample, it cannot invent it. A
 # model that never samples a correct answer gives every group zero reward
 # variance -> zero advantage -> no gradient.
-BASE_MODEL = os.environ.get("GRPO_COT_MODEL", "Qwen/Qwen2.5-0.5B-Instruct")
+BASE_MODEL = os.environ.get("GRPO_COT_MODEL", "Qwen/Qwen2.5-1.5B-Instruct")
 # 256 clipped 30-56% of completions in a smoke run, and a truncated completion
 # poisons last-number scoring: the final number becomes a mid-reasoning value, so
 # a correct chain gets marked wrong. Lower it via env if VRAM is tight.
@@ -75,47 +75,54 @@ assert (
     last_ckpt is not None
 ), f"no checkpoint under {OUTPUT_DIR} -- train grpo_cot first"
 model, tokenizer = load_model_and_tokenizer(model_name=last_ckpt, use_gpu=True)
+# Also load the untrained base for a side-by-side comparison (shares the tokenizer).
+base_model, _ = load_model_and_tokenizer(model_name=BASE_MODEL, use_gpu=True)
 
 
 ######################
 # eval the trained model for question on train
 ######################
-def answer_question(idx, dataset=None):
-    """Print the loaded model's full chain-of-thought for a single problem.
-
-    Handy for eyeballing an aha-moment candidate: run the same index before and
-    after GRPO and watch the chain for self-correction ("wait", "let me recompute",
-    "actually"). Defaults to the train split; pass eval_dataset for held-out.
-    """
-    dataset = train_dataset if dataset is None else dataset
-    ex = dataset[idx]
+def _generate(m, ex):
+    """Greedy completion of one problem by model `m` (deterministic -> comparable)."""
     prompt = tokenizer.apply_chat_template(
         ex["prompt"], tokenize=False, add_generation_prompt=True
     )
     inputs = tokenizer(prompt, return_tensors="pt", truncation=True, max_length=768).to(
-        model.device
+        m.device
     )
     gen_config = GenerationConfig(
         max_new_tokens=MAX_COMPLETION_LENGTH,
-        do_sample=False,  # greedy: deterministic, so before/after is comparable
+        do_sample=False,
         pad_token_id=tokenizer.pad_token_id,
         eos_token_id=tokenizer.eos_token_id,
     )
-    model.eval()
+    m.eval()
     with torch.no_grad():
-        out = model.generate(**inputs, generation_config=gen_config)
-    resp = tokenizer.decode(
+        out = m.generate(**inputs, generation_config=gen_config)
+    return tokenizer.decode(
         out[0][inputs["input_ids"].shape[1] :], skip_special_tokens=True
     ).strip()
-    c = Completion(resp)
-    print(
-        f"\n===== Q#{idx}  gold={ex['gold']}  correct={c.is_correct(ex['gold'])} ====="
-    )
+
+
+def answer_question(idx, dataset=None):
+    """Print BASE vs GRPO chains for one problem, side by side.
+
+    Same greedy decode for both, so the diff is the training effect -- eyeball it for an
+    aha-moment / self-correction ("wait", "let me recompute", "actually") that the base
+    lacks. Defaults to the train split; pass eval_dataset for held-out.
+    """
+    dataset = train_dataset if dataset is None else dataset
+    ex = dataset[idx]
+    print(f"\n===== Q#{idx}  gold={ex['gold']} =====")
     print("Q:", ex["prompt"][-1]["content"])
     print(f"\nreference CoT: {ex['reference']}")
-    print(f"\nmodel answer: {c.final_number}")
-    print(f"model CoT:\n{resp}")
-    return resp
+    for tag, m in [("BASE", base_model), ("GRPO", model)]:
+        resp = _generate(m, ex)
+        c = Completion(resp)
+        print(
+            f"\n----- {tag}  answer={c.final_number}  correct={c.is_correct(ex['gold'])} -----"
+        )
+        print(resp)
 
 
 if __name__ == "__main__":

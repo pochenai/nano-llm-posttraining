@@ -101,15 +101,17 @@ class Completion:
 ######################
 # reward functions
 ######################
-# Graded like gsm8k_rewards so reward rises smoothly (attempt -> valid -> correct)
-# instead of stepping 0 -> max, which keeps in-group variance while the policy is still
-# bad -- otherwise every group is all-zero -> zero advantage -> no gradient.
+# Correctness must DOMINATE. An earlier graded design (flat credit for "used the
+# numbers" / "has an expression" / format tiers) was farmable: the policy learned to
+# emit a well-formed, right-numbers, wrong-value expression -- collecting ~1.5 easy
+# points without ever searching for the target, and completions SHORTENED (the opposite
+# of the aha we want). With G large enough that frac_reward_zero_std=0, those crutches
+# are unnecessary and harmful. So: correctness (exact hit) dominates; proximity gives a
+# search *slope* that can't be farmed by a random valid expression (only getting CLOSE
+# counts, and getting close needs search); format stays tiny, just to hold structure.
 CORRECTNESS_WEIGHT = 2.0  # each number once AND evaluates to target
-VALIDEQ_WEIGHT = 0.5  # uses exactly the given numbers (well-formed attempt)
-ANSWER_WEIGHT = 0.25  # produced *some* evaluable expression in <answer>
-XMLCOUNT_WEIGHT = 0.125
-SOFT_FORMAT_WEIGHT = 0.25
-STRICT_FORMAT_WEIGHT = 0.25
+PROXIMITY_WEIGHT = 0.5  # graded by how near the value lands to the target
+FORMAT_WEIGHT = 0.2  # small: keep the <think>/<answer> structure, not farmable
 
 
 def correctness_reward(completions, target, nums, **_) -> list[float]:
@@ -120,49 +122,32 @@ def correctness_reward(completions, target, nums, **_) -> list[float]:
     ]
 
 
-def valideq_reward(completions, nums, **_) -> list[float]:
-    """Partial credit for using exactly the given numbers, target aside."""
-    return [
-        VALIDEQ_WEIGHT if Completion(c).uses_exact_numbers(n) else 0.0
-        for c, n in zip(completions, nums)
-    ]
+def proximity_reward(completions, target, nums, **_) -> list[float]:
+    """Graded credit for using the exact numbers to land NEAR the target.
+
+    Unlike a flat 'used the numbers' reward, this can't be farmed by a random valid
+    expression -- only closeness counts, and getting close needs actual search. Requires
+    the exact numbers (so it can't be farmed by just writing the target), then scales
+    with 1 - |value - target| / |target|. correctness (exact hit) is the 2.0 on top.
+    """
+    out = []
+    for c, t, n in zip(completions, target, nums):
+        comp = Completion(c)
+        if comp.uses_exact_numbers(n) and comp.value is not None:
+            rel = abs(comp.value - float(t)) / max(1.0, abs(float(t)))
+            out.append(PROXIMITY_WEIGHT * max(0.0, 1.0 - rel))
+        else:
+            out.append(0.0)
+    return out
 
 
-def answer_reward(completions, **_) -> list[float]:
-    """Credit for putting *an evaluable expression* in <answer>, right or wrong."""
-    return [
-        ANSWER_WEIGHT if Completion(c).value is not None else 0.0 for c in completions
-    ]
+def format_reward(completions, **_) -> list[float]:
+    """Small credit for the <think>/<answer> structure -- hold the format the policy
+    already learned without letting it farm a big plateau."""
+    return [FORMAT_WEIGHT if Completion(c).is_soft_format else 0.0 for c in completions]
 
 
-def xmlcount_reward(completions, **_) -> list[float]:
-    """Fractional credit per tag present -- keeps variance before full structure."""
-    return [XMLCOUNT_WEIGHT * Completion(c).tag_hits for c in completions]
-
-
-def soft_format_reward(completions, **_) -> list[float]:
-    """Tags present and ordered; stray text around them tolerated."""
-    return [
-        SOFT_FORMAT_WEIGHT if Completion(c).is_soft_format else 0.0 for c in completions
-    ]
-
-
-def strict_format_reward(completions, **_) -> list[float]:
-    """The exact requested structure, nothing else."""
-    return [
-        STRICT_FORMAT_WEIGHT if Completion(c).is_strict_format else 0.0
-        for c in completions
-    ]
-
-
-REWARD_FUNCS = [
-    correctness_reward,
-    valideq_reward,
-    answer_reward,
-    xmlcount_reward,
-    soft_format_reward,
-    strict_format_reward,
-]
+REWARD_FUNCS = [correctness_reward, proximity_reward, format_reward]
 
 
 ######################
